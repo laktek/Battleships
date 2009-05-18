@@ -1,0 +1,5 @@
+First you need to define your feature with scenarios
+Then when you run `cucumber features/salvo.feature` you should receive:
+  2 scenarios
+  8 steps pending (8 with no step definition)
+Note steps are yellow colored meaning they are pending
