@@ -1,74 +1,97 @@
 #require "socket"
+require "singleton"
 require "eventmachine"
 
-class Game
+module Battleships
 
-  #Starts a new game as a server waiting for someone to connect
-  # or as a client connecting to already avaialable server
-  def initialize(options = {})
-    unless options.empty?
-      #setup the server 
-      @server = TCPServer.new(options.fetch(:host){"localhost"}, options[:port])
+  module IoStreams
+    #TODO consider refactoring this module
+    #sets the output stream
+    attr_writer :output_stream
+
+    def output_stream
+      @output_stream ||= STDOUT 
     end
-    @last_salvo_targets = []
   end
 
-  def standby
-   @thread = Thread.new {
-    while session = @server.accept
-      msg = session.gets
-      self.last_salvo_targets = msg
+  module GameBroker
+    include EM::Protocols::Stomp
+    include IoStreams
 
-      data = get_salvo  #"[{}, ['A2', 'B2', 'C2']]"
-      session.puts(data)
+    # The instance of game
+    attr_accessor :backend
+
+    def post_init
+      output_stream.puts "Starting a new game..."
     end
-   }
+    
+    def connection_completed
+      connect :player => "test" #self.nickname 
+      get_input
+    end
+
+    def receive_msg msg
+      case msg.command
+        when "CONNECT"
+          player = msg.headers['plyaer'] || "Unknown player"
+          output_stream.puts "#{player} offers to play a new game. Accept?"
+        when "SEND"
+          output_stream.puts "Received Salvo: #{msg.body}"
+          get_input
+      end
+    end
+
+    def get_input
+      output_stream.puts "Enter 3 co-ordinates to attack (or CLOSE to end game):"
+      user_input = gets.rstrip
+
+      unless user_input == "CLOSE"
+        send_salvo(user_input)
+      else
+        close_connection
+      end
+    end
+
+    def send_salvo(points)
+      send "salvo", points, {"content-length" => points.size}
+    end
+
+    def unbind
+      output_stream.puts "Game Halted!"
+    end
+
   end
 
-  def close
-    @server.close
-    @thread.kill
-  end
+  class Game
+    #include Singleton
+    include IoStreams
 
-  def fire(salvo)
-    @connection.puts serialized_salvo(salvo) 
+    attr_accessor :nickname
 
-    response = @connection.gets
-    self.last_salvo_targets = response
-  end
+        # Sets up as a server and waits for a game request 
+    def start(host="localhost", port=2230)
+      output_stream.puts "waiting till an opponent connect..."
+      EventMachine::run {
+        EventMachine::start_server host, port, GameBroker, &method(:setup_handler) 
+      }
+    end
 
-  def connect(host, port)
-    @connection = TCPSocket.new(host, port)
-  end
+    # Connect a client to an available server
+    def connect(host="localhost", port=2230)
+      output_stream.puts "sending request for a new game..."
+      EventMachine::run {
+        EventMachine::connect host, port, GameBroker, &method(:setup_handler)
+      }
+    end
 
-  def show_last_salvo
-    "Received Salvo: #{self.last_salvo_targets}"
-  end
+    protected
+    def setup_handler(connection)
+      connection.backend = self
+      connection.output_stream = self.output_stream
+    end
 
-  def last_salvo_targets=(response)
-    @last_salvo_targets = eval(response.rstrip)[1]
-  end
 
-  def last_salvo_targets
-    @last_salvo_targets.join(", ")
-  end
-
-  def get_salvo
-    puts "Enter 3 targets to aim (eg: A1, B1, C1):"
-    targets = gets
-    puts targets
-    #salvo = serialized_salvo(input.rstrip.split(", ")) 
-  end
-
-  private
-  def serialized_salvo(salvo) 
-    puts salvo
-    string_values = salvo.map{|s| "'#{s}'"}.join(", ")
-    "[{}, [#{string_values}]]"
   end
 
 end
 
-class Salvo < Array
-
-end
